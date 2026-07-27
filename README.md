@@ -18,9 +18,8 @@ the profile through CDP.
 
 ## Download
 
-Open the latest successful
-[Build workflow](https://github.com/dz-sh/cdp-switcher/actions/workflows/build.yml)
-and download:
+Download the latest version from
+[GitHub Releases](https://github.com/dz-sh/cdp-switcher/releases/latest):
 
 - `CdpSwitcher.exe` for a single-file app; or
 - `CdpSwitcher-win-x64.zip` for the complete app directory.
