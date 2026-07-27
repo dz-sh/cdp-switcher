@@ -19,7 +19,7 @@ the profile through CDP.
 ## Download
 
 Download the latest version from
-[GitHub Releases](https://github.com/dz-sh/cdp-switcher/releases/latest):
+[GitHub Releases](https://github.com/dz-sh/cdp-switcher/releases):
 
 - `CdpSwitcher.exe` for a single-file app; or
 - `CdpSwitcher-win-x64.zip` for the complete app directory.
