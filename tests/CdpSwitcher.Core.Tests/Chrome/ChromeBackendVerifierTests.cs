@@ -11,13 +11,23 @@ public sealed class ChromeBackendVerifierTests
     {
         using var verifier = new ChromeBackendVerifier(
             new StubPortOwnerResolver(processId: 42));
-        var discovery = new DevToolsActivePort(
-            51347,
-            "/devtools/browser/example");
 
-        await Assert.ThrowsExactlyAsync<InvalidOperationException>(
+        await Assert.ThrowsExactlyAsync<ChromeBackendPortConflictException>(
             () => verifier.VerifyAsync(
-                discovery,
+                port: 51347,
+                expectedProcessId: 43,
+                CancellationToken.None));
+    }
+
+    [TestMethod]
+    public async Task Verify_waits_when_the_listener_is_not_ready()
+    {
+        using var verifier = new ChromeBackendVerifier(
+            new StubPortOwnerResolver(processId: null));
+
+        await Assert.ThrowsExactlyAsync<ChromeBackendNotReadyException>(
+            () => verifier.VerifyAsync(
+                port: 51347,
                 expectedProcessId: 43,
                 CancellationToken.None));
     }
@@ -25,9 +35,9 @@ public sealed class ChromeBackendVerifierTests
     private sealed class StubPortOwnerResolver :
         ITcpPortOwnerResolver
     {
-        private readonly int _processId;
+        private readonly int? _processId;
 
-        public StubPortOwnerResolver(int processId)
+        public StubPortOwnerResolver(int? processId)
         {
             _processId = processId;
         }

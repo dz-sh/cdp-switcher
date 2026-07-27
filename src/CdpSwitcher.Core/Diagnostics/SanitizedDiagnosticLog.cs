@@ -125,6 +125,8 @@ public sealed class SanitizedDiagnosticLog
             null => null,
             ChromeNotFoundException => "chrome_not_found",
             ChromeStartException => "chrome_start_failed",
+            ChromeBackendPortUnavailableException =>
+                "backend_port_conflict",
             ChromeProfileInUseException => "profile_in_use",
             ManagedChromeDidNotCloseException => "chrome_close_timeout",
             OperationCanceledException => "timeout",

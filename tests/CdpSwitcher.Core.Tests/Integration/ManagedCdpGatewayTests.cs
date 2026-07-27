@@ -33,7 +33,8 @@ public sealed class ManagedCdpGatewayTests
             new ChromeLocator(),
             new ManagedProfilePaths(testRoot),
             new ChromeBackendVerifier(),
-            new ChromeProfileUseDetector());
+            new ChromeProfileUseDetector(),
+            frontendPort);
         var coordinator = new CdpSwitchCoordinator(
             gateway,
             chromeController);
@@ -76,6 +77,11 @@ public sealed class ManagedCdpGatewayTests
                 profile.Id,
                 coordinator.State.ManagedProfile?.Id);
             Assert.IsTrue(coordinator.State.IsChromeRunning);
+            Assert.AreNotEqual(
+                frontendPort,
+                chromeController.Current?.Backend.Port);
+            Assert.IsTrue(
+                chromeController.Current?.Backend.Port is > 0);
 
             Uri firstWebSocketUri;
             using (var activeResponse = await httpClient.GetAsync(
@@ -144,22 +150,96 @@ public sealed class ManagedCdpGatewayTests
                     coordinator.State.ManagedProfile?.Tags[0].Name);
                 Assert.IsTrue(gateway.HasActiveBackend);
 
-                var command =
-                    """{"id":1,"method":"Browser.getVersion"}"""u8
-                    .ToArray();
-                await metadataSession.SendAsync(
-                    command,
-                    WebSocketMessageType.Text,
-                    endOfMessage: true,
+                var browserVersion = await SendCommandAsync(
+                    metadataSession,
+                    new
+                    {
+                        id = 1,
+                        method = "Browser.getVersion",
+                    },
+                    expectedId: 1,
                     timeout.Token);
-                var responseBuffer = new byte[4096];
-                var result = await metadataSession.ReceiveAsync(
-                    responseBuffer,
+                Assert.IsTrue(
+                    browserVersion.TryGetProperty(
+                        "product",
+                        out _));
+
+                var createdTarget = await SendCommandAsync(
+                    metadataSession,
+                    new
+                    {
+                        id = 2,
+                        method = "Target.createTarget",
+                        @params = new
+                        {
+                            url = "about:blank",
+                        },
+                    },
+                    expectedId: 2,
                     timeout.Token);
-                Assert.AreEqual(
-                    WebSocketMessageType.Text,
-                    result.MessageType);
-                Assert.IsTrue(result.Count > 0);
+                var targetId = createdTarget
+                    .GetProperty("targetId")
+                    .GetString();
+                Assert.IsNotNull(targetId);
+
+                try
+                {
+                    var attachedTarget = await SendCommandAsync(
+                        metadataSession,
+                        new
+                        {
+                            id = 3,
+                            method = "Target.attachToTarget",
+                            @params = new
+                            {
+                                targetId,
+                                flatten = true,
+                            },
+                        },
+                        expectedId: 3,
+                        timeout.Token);
+                    var sessionId = attachedTarget
+                        .GetProperty("sessionId")
+                        .GetString();
+                    Assert.IsNotNull(sessionId);
+
+                    var webdriverResult = await SendCommandAsync(
+                        metadataSession,
+                        new
+                        {
+                            id = 4,
+                            method = "Runtime.evaluate",
+                            @params = new
+                            {
+                                expression = "navigator.webdriver",
+                                returnByValue = true,
+                            },
+                            sessionId,
+                        },
+                        expectedId: 4,
+                        timeout.Token);
+                    Assert.IsFalse(
+                        webdriverResult
+                            .GetProperty("result")
+                            .GetProperty("value")
+                            .GetBoolean());
+                }
+                finally
+                {
+                    await SendCommandAsync(
+                        metadataSession,
+                        new
+                        {
+                            id = 5,
+                            method = "Target.closeTarget",
+                            @params = new
+                            {
+                                targetId,
+                            },
+                        },
+                        expectedId: 5,
+                        timeout.Token);
+                }
             }
 
             await gateway.PublishAsync(
@@ -229,6 +309,63 @@ public sealed class ManagedCdpGatewayTests
         var port = ((IPEndPoint)listener.LocalEndpoint).Port;
         listener.Stop();
         return port;
+    }
+
+    private static async Task<JsonElement> SendCommandAsync(
+        ClientWebSocket socket,
+        object command,
+        int expectedId,
+        CancellationToken cancellationToken)
+    {
+        var payload = JsonSerializer.SerializeToUtf8Bytes(command);
+        await socket.SendAsync(
+            payload,
+            WebSocketMessageType.Text,
+            endOfMessage: true,
+            cancellationToken);
+
+        var buffer = new byte[8192];
+        while (true)
+        {
+            using var message = new MemoryStream();
+            WebSocketReceiveResult result;
+            do
+            {
+                result = await socket.ReceiveAsync(
+                    new ArraySegment<byte>(buffer),
+                    cancellationToken);
+                if (result.MessageType == WebSocketMessageType.Close)
+                {
+                    throw new WebSocketException(
+                        "Chrome closed the test CDP connection.");
+                }
+
+                message.Write(buffer, 0, result.Count);
+            }
+            while (!result.EndOfMessage);
+
+            message.Position = 0;
+            using var document = await JsonDocument.ParseAsync(
+                message,
+                cancellationToken: cancellationToken);
+            if (!document.RootElement.TryGetProperty(
+                    "id",
+                    out var id) ||
+                id.GetInt32() != expectedId)
+            {
+                continue;
+            }
+
+            if (document.RootElement.TryGetProperty("error", out var error))
+            {
+                throw new InvalidOperationException(
+                    $"Chrome rejected the test CDP command: {error}");
+            }
+
+            return document.RootElement
+                .GetProperty("result")
+                .Clone();
+        }
     }
 
     private static async Task DeleteTestDirectoryAsync(string path)

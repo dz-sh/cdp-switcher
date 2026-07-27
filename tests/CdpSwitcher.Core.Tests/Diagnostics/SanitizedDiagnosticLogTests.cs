@@ -1,3 +1,4 @@
+using CdpSwitcher.Core.Chrome;
 using CdpSwitcher.Core.Diagnostics;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 
@@ -84,6 +85,27 @@ public sealed class SanitizedDiagnosticLogTests
             $"\"profileId\":\"{profileId:N}\"");
         Assert.IsFalse(content.Contains(
             "errorCategory",
+            StringComparison.Ordinal));
+    }
+
+    [TestMethod]
+    public void Log_records_a_sanitized_backend_port_conflict()
+    {
+        var log = new SanitizedDiagnosticLog(_logPath);
+
+        var written = log.TryWrite(
+            DiagnosticEvent.OperationFailed,
+            profileId: null,
+            duration: null,
+            exception: new ChromeBackendPortUnavailableException());
+
+        Assert.IsTrue(written);
+        var content = File.ReadAllText(_logPath);
+        StringAssert.Contains(
+            content,
+            "\"errorCategory\":\"backend_port_conflict\"");
+        Assert.IsFalse(content.Contains(
+            "private connection",
             StringComparison.Ordinal));
     }
 }

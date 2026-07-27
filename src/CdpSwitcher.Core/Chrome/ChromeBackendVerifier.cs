@@ -33,11 +33,15 @@ public sealed class ChromeBackendVerifier : IDisposable
     }
 
     public async Task<ChromeBackend> VerifyAsync(
-        DevToolsActivePort discovery,
+        int port,
         int expectedProcessId,
         CancellationToken cancellationToken)
     {
-        ArgumentNullException.ThrowIfNull(discovery);
+        if (port is < 1 or > 65535)
+        {
+            throw new ArgumentOutOfRangeException(nameof(port));
+        }
+
         if (expectedProcessId < 1)
         {
             throw new ArgumentOutOfRangeException(
@@ -49,10 +53,10 @@ public sealed class ChromeBackendVerifier : IDisposable
                 cancellationToken);
         timeout.CancelAfter(VerificationTimeout);
 
-        VerifyPortOwner(discovery.Port, expectedProcessId);
+        VerifyPortOwner(port, expectedProcessId);
 
         var versionUri = new Uri(
-            $"http://127.0.0.1:{discovery.Port}/json/version");
+            $"http://127.0.0.1:{port}/json/version");
         using var response = await _httpClient.GetAsync(
             versionUri,
             timeout.Token).ConfigureAwait(false);
@@ -73,11 +77,8 @@ public sealed class ChromeBackendVerifier : IDisposable
                 out var webSocketUri) ||
             webSocketUri.Scheme != "ws" ||
             !IsLoopbackHost(webSocketUri.Host) ||
-            webSocketUri.Port != discovery.Port ||
-            !string.Equals(
-                webSocketUri.AbsolutePath,
-                discovery.BrowserWebSocketPath,
-                StringComparison.Ordinal))
+            webSocketUri.Port != port ||
+            !IsBrowserWebSocketPath(webSocketUri.AbsolutePath))
         {
             throw new InvalidOperationException(
                 "Chrome CDP discovery could not be verified.");
@@ -95,10 +96,10 @@ public sealed class ChromeBackendVerifier : IDisposable
 
         socket.Abort();
         var owningProcessId = VerifyPortOwner(
-            discovery.Port,
+            port,
             expectedProcessId);
         return new ChromeBackend(
-            discovery.Port,
+            port,
             webSocketUri,
             owningProcessId);
     }
@@ -109,13 +110,25 @@ public sealed class ChromeBackendVerifier : IDisposable
     {
         var owningProcessId =
             _portOwnerResolver.FindListeningProcessId(port);
+        if (owningProcessId is null)
+        {
+            throw new ChromeBackendNotReadyException();
+        }
+
         if (owningProcessId != expectedProcessId)
         {
-            throw new InvalidOperationException(
-                "Chrome CDP port ownership could not be verified.");
+            throw new ChromeBackendPortConflictException();
         }
 
         return expectedProcessId;
+    }
+
+    private static bool IsBrowserWebSocketPath(string path)
+    {
+        return path.StartsWith(
+                   "/devtools/browser/",
+                   StringComparison.Ordinal) &&
+               !path.Contains("..", StringComparison.Ordinal);
     }
 
     private static bool IsLoopbackHost(string host)

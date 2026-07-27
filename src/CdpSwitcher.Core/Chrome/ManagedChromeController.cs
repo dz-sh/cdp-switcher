@@ -19,6 +19,8 @@ public sealed class ManagedChromeController : IDisposable
     private readonly ManagedProfilePaths _profilePaths;
     private readonly ChromeBackendVerifier _backendVerifier;
     private readonly ChromeProfileUseDetector _profileUseDetector;
+    private readonly IChromeBackendPortSelector _portSelector;
+    private readonly int _frontendPort;
     private readonly object _stateLock = new();
     private ManagedChromeSession? _current;
     private int? _expectedExitProcessId;
@@ -27,12 +29,38 @@ public sealed class ManagedChromeController : IDisposable
         ChromeLocator chromeLocator,
         ManagedProfilePaths profilePaths,
         ChromeBackendVerifier backendVerifier,
-        ChromeProfileUseDetector profileUseDetector)
+        ChromeProfileUseDetector profileUseDetector,
+        int frontendPort = ProfileStore.DefaultFrontendPort)
+        : this(
+            chromeLocator,
+            profilePaths,
+            backendVerifier,
+            profileUseDetector,
+            new ChromeBackendPortSelector(),
+            frontendPort)
     {
+    }
+
+    internal ManagedChromeController(
+        ChromeLocator chromeLocator,
+        ManagedProfilePaths profilePaths,
+        ChromeBackendVerifier backendVerifier,
+        ChromeProfileUseDetector profileUseDetector,
+        IChromeBackendPortSelector portSelector,
+        int frontendPort)
+    {
+        if (frontendPort is < 1 or > 65535)
+        {
+            throw new ArgumentOutOfRangeException(nameof(frontendPort));
+        }
+
+        ArgumentNullException.ThrowIfNull(portSelector);
         _chromeLocator = chromeLocator;
         _profilePaths = profilePaths;
         _backendVerifier = backendVerifier;
         _profileUseDetector = profileUseDetector;
+        _portSelector = portSelector;
+        _frontendPort = frontendPort;
     }
 
     internal event EventHandler<ManagedChromeExitedEventArgs>? UnexpectedExit;
@@ -97,11 +125,8 @@ public sealed class ManagedChromeController : IDisposable
         if (Current is { IsRunning: true } current &&
             current.Profile.Id == profile.Id)
         {
-            var discovery = new DevToolsActivePort(
-                current.Backend.Port,
-                current.Backend.BrowserWebSocketUri.AbsolutePath);
             var backend = await _backendVerifier.VerifyAsync(
-                discovery,
+                current.Backend.Port,
                 current.Process.Id,
                 cancellationToken).ConfigureAwait(false);
             current.Process.Refresh();
@@ -142,26 +167,34 @@ public sealed class ManagedChromeController : IDisposable
             throw new ChromeProfileInUseException(profile);
         }
 
-        var discoveryFile = Path.Combine(
-            profileDirectory,
-            "DevToolsActivePort");
-        if (File.Exists(discoveryFile))
-        {
-            File.Delete(discoveryFile);
-        }
+        using var startupTimeout =
+            CancellationTokenSource.CreateLinkedTokenSource(
+                cancellationToken);
+        startupTimeout.CancelAfter(StartupTimeout);
 
-        var startInfo = new ProcessStartInfo(chromePath)
-        {
-            UseShellExecute = false,
-        };
-        startInfo.ArgumentList.Add(
-            $"--user-data-dir={profileDirectory}");
-        startInfo.ArgumentList.Add("--remote-debugging-port=0");
-        startInfo.ArgumentList.Add(
-            "--remote-debugging-address=127.0.0.1");
-        startInfo.ArgumentList.Add("--no-first-run");
-        startInfo.ArgumentList.Add("--no-default-browser-check");
-        startInfo.ArgumentList.Add("about:blank");
+        return await ChromeBackendPortRetry.ExecuteAsync(
+            _portSelector,
+            _frontendPort,
+            (backendPort, token) => StartAttemptAsync(
+                chromePath,
+                profile,
+                profileDirectory,
+                backendPort,
+                token),
+            startupTimeout.Token).ConfigureAwait(false);
+    }
+
+    private async Task<ManagedChromeSession> StartAttemptAsync(
+        string chromePath,
+        BrowserProfile profile,
+        string profileDirectory,
+        int backendPort,
+        CancellationToken cancellationToken)
+    {
+        var startInfo = CreateStartInfo(
+            chromePath,
+            profileDirectory,
+            backendPort);
 
         Process? process;
         try
@@ -180,13 +213,9 @@ public sealed class ManagedChromeController : IDisposable
 
         try
         {
-            var discovery = await WaitForDiscoveryAsync(
+            var backend = await WaitForBackendAsync(
                 process,
-                discoveryFile,
-                cancellationToken).ConfigureAwait(false);
-            var backend = await _backendVerifier.VerifyAsync(
-                discovery,
-                process.Id,
+                backendPort,
                 cancellationToken).ConfigureAwait(false);
             process.Refresh();
             if (process.HasExited)
@@ -216,6 +245,34 @@ public sealed class ManagedChromeController : IDisposable
             process.Dispose();
             throw;
         }
+    }
+
+    internal static ProcessStartInfo CreateStartInfo(
+        string chromePath,
+        string profileDirectory,
+        int backendPort)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(chromePath);
+        ArgumentException.ThrowIfNullOrWhiteSpace(profileDirectory);
+        if (backendPort is < 1 or > 65535)
+        {
+            throw new ArgumentOutOfRangeException(nameof(backendPort));
+        }
+
+        var startInfo = new ProcessStartInfo(chromePath)
+        {
+            UseShellExecute = false,
+        };
+        startInfo.ArgumentList.Add(
+            $"--user-data-dir={profileDirectory}");
+        startInfo.ArgumentList.Add(
+            $"--remote-debugging-port={backendPort}");
+        startInfo.ArgumentList.Add(
+            "--remote-debugging-address=127.0.0.1");
+        startInfo.ArgumentList.Add("--no-first-run");
+        startInfo.ArgumentList.Add("--no-default-browser-check");
+        startInfo.ArgumentList.Add("about:blank");
+        return startInfo;
     }
 
     internal async Task<bool> StopAsync(
@@ -422,18 +479,14 @@ public sealed class ManagedChromeController : IDisposable
         process.Dispose();
     }
 
-    private static async Task<DevToolsActivePort> WaitForDiscoveryAsync(
+    private async Task<ChromeBackend> WaitForBackendAsync(
         Process process,
-        string discoveryFile,
+        int backendPort,
         CancellationToken cancellationToken)
     {
-        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(
-            cancellationToken);
-        timeout.CancelAfter(StartupTimeout);
-
         while (true)
         {
-            timeout.Token.ThrowIfCancellationRequested();
+            cancellationToken.ThrowIfCancellationRequested();
             process.Refresh();
             if (process.HasExited)
             {
@@ -444,26 +497,24 @@ public sealed class ManagedChromeController : IDisposable
 
             try
             {
-                if (File.Exists(discoveryFile))
-                {
-                    var content = await File.ReadAllTextAsync(
-                        discoveryFile,
-                        timeout.Token).ConfigureAwait(false);
-                    return DevToolsActivePort.Parse(content);
-                }
+                return await _backendVerifier.VerifyAsync(
+                    backendPort,
+                    process.Id,
+                    cancellationToken).ConfigureAwait(false);
             }
-            catch (IOException)
+            catch (ChromeBackendNotReadyException)
             {
-                // Chrome may still be replacing the discovery file.
+                // Chrome has not opened the selected listener yet.
             }
-            catch (FormatException)
+            catch (HttpRequestException exception)
+                when (exception.StatusCode is null)
             {
-                // Chrome may have written only the first line so far.
+                // The listener exists but HTTP discovery is not ready yet.
             }
 
             await Task.Delay(
                 TimeSpan.FromMilliseconds(100),
-                timeout.Token).ConfigureAwait(false);
+                cancellationToken).ConfigureAwait(false);
         }
     }
 
