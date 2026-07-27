@@ -1,0 +1,106 @@
+name: Build
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  DOTNET_CLI_TELEMETRY_OPTOUT: 1
+  DOTNET_NOLOGO: true
+
+jobs:
+  build:
+    name: Build and test Windows x64
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+
+      - name: Set up .NET 10
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Restore
+        run: dotnet restore CdpSwitcher.slnx -p:Configuration=Release -p:Platform=x64
+
+      - name: Build
+        run: dotnet build CdpSwitcher.slnx --configuration Release --no-restore -p:Platform=x64
+
+      - name: Test
+        run: >-
+          dotnet test tests/CdpSwitcher.Core.Tests/CdpSwitcher.Core.Tests.csproj
+          --configuration Release
+          --no-build
+          --logger "trx;LogFileName=core-tests.trx"
+          --results-directory TestResults
+
+      - name: Publish complete app directory
+        run: >-
+          dotnet publish src/CdpSwitcher.App/CdpSwitcher.App.csproj
+          --configuration Release
+          --runtime win-x64
+          --self-contained true
+          --no-restore
+          -p:Platform=x64
+          -p:PublishSingleFile=false
+          -p:IntermediateOutputPath=obj/CdpSwitcher-folder/
+          --output artifacts/CdpSwitcher-win-x64
+
+      - name: Create complete app ZIP
+        shell: pwsh
+        run: >-
+          Compress-Archive
+          -Path artifacts/CdpSwitcher-win-x64/*
+          -DestinationPath artifacts/CdpSwitcher-win-x64.zip
+
+      - name: Publish single-file app
+        run: >-
+          dotnet publish src/CdpSwitcher.App/CdpSwitcher.App.csproj
+          --configuration Release
+          --runtime win-x64
+          --self-contained true
+          --no-restore
+          -p:Platform=x64
+          -p:IntermediateOutputPath=obj/CdpSwitcher-single-file/
+          --output artifacts/CdpSwitcher-single-file
+
+      - name: Verify embedded deployment manifests
+        shell: pwsh
+        run: ./scripts/ci/verify-publish.ps1
+
+      - name: Upload single-file EXE
+        uses: actions/upload-artifact@v7
+        with:
+          path: artifacts/CdpSwitcher-single-file/CdpSwitcher.exe
+          if-no-files-found: error
+          retention-days: 14
+          archive: false
+
+      - name: Upload complete app ZIP
+        uses: actions/upload-artifact@v7
+        with:
+          path: artifacts/CdpSwitcher-win-x64.zip
+          if-no-files-found: error
+          retention-days: 14
+          archive: false
+
+      - name: Smoke test published apps
+        shell: pwsh
+        run: ./scripts/ci/smoke-test.ps1
+
+      - name: Upload test results
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: CdpSwitcher-test-results
+          path: TestResults
+          if-no-files-found: warn
+          retention-days: 14

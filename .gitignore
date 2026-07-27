@@ -1,0 +1,42 @@
+# Build output
+bin/
+obj/
+.vs/
+artifacts/
+publish/
+TestResults/
+*.user
+*.suo
+
+# IDE settings
+.idea/
+.vscode/
+
+# Local configuration
+.env
+.env.*
+!.env.example
+*.local.json
+appsettings.Local.json
+
+# Signing material
+*.pfx
+*.p12
+*.pem
+*.key
+*.snk
+
+# Runtime data
+profiles/
+ChromeProfiles/
+logs/
+diagnostics/
+crash-dumps/
+DevToolsActivePort
+
+# Temporary files
+*.tmp
+*.bak
+*.log
+Thumbs.db
+Desktop.ini

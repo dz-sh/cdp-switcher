@@ -1,0 +1,12 @@
+<Solution>
+  <Configurations>
+    <Platform Name="x64" />
+  </Configurations>
+  <Folder Name="/src/">
+    <Project Path="src/CdpSwitcher.App/CdpSwitcher.App.csproj" />
+    <Project Path="src/CdpSwitcher.Core/CdpSwitcher.Core.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/CdpSwitcher.Core.Tests/CdpSwitcher.Core.Tests.csproj" />
+  </Folder>
+</Solution>
