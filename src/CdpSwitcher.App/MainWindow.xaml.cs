@@ -450,7 +450,8 @@ public sealed partial class MainWindow : Window
                 Text =
                     "The connected CDP client will be able to control " +
                     "this browser profile, including while you sign in, " +
-                    "until you stop it.",
+                    "until you stop it. Control continues if the RDP " +
+                    "window is disconnected or Windows is locked.",
                 TextWrapping = TextWrapping.Wrap,
             });
         if (profile.Tags.Count > 0)

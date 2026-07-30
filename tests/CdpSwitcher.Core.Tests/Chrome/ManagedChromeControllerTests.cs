@@ -20,6 +20,7 @@ public sealed class ManagedChromeControllerTests
                 @"--user-data-dir=C:\profiles\example",
                 "--remote-debugging-port=51347",
                 "--remote-debugging-address=127.0.0.1",
+                "--disable-backgrounding-occluded-windows",
                 "--no-first-run",
                 "--no-default-browser-check",
                 "about:blank",
@@ -34,5 +35,18 @@ public sealed class ManagedChromeControllerTests
                 argument.Contains(
                     "headless",
                     StringComparison.OrdinalIgnoreCase)));
+        Assert.AreEqual(
+            1,
+            startInfo.ArgumentList.Count(
+                argument =>
+                    argument.Equals(
+                        "--disable-backgrounding-occluded-windows",
+                        StringComparison.Ordinal)));
+        CollectionAssert.DoesNotContain(
+            startInfo.ArgumentList.ToArray(),
+            "--disable-background-timer-throttling");
+        CollectionAssert.DoesNotContain(
+            startInfo.ArgumentList.ToArray(),
+            "--disable-renderer-backgrounding");
     }
 }

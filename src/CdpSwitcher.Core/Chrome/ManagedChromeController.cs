@@ -269,6 +269,8 @@ public sealed class ManagedChromeController : IDisposable
             $"--remote-debugging-port={backendPort}");
         startInfo.ArgumentList.Add(
             "--remote-debugging-address=127.0.0.1");
+        startInfo.ArgumentList.Add(
+            "--disable-backgrounding-occluded-windows");
         startInfo.ArgumentList.Add("--no-first-run");
         startInfo.ArgumentList.Add("--no-default-browser-check");
         startInfo.ArgumentList.Add("about:blank");
